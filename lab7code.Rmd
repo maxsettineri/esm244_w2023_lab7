@@ -1,0 +1,17 @@
+---
+title: "Lab 7"
+author: "Max Settineri"
+date: "2023-02-23"
+output: html_document
+---
+
+```{r setup, echo = TRUE, message = FALSE, warning = FALSE}
+knitr::opts_chunk$set(echo = TRUE, warning = FALSE, message = FALSE)
+library(tidyverse)
+library(here)
+library(broom)
+
+# Spatial data packages
+library(sf)
+library(tmap)
+```
