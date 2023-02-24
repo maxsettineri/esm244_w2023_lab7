@@ -1,0 +1,124 @@
+---
+title: "Lab 7 Part 2"
+author: "Max Settineri"
+date: "2023-02-23"
+output: html_document
+---
+
+```{r setup, echo = TRUE, message = FALSE, warning = FALSE}
+knitr::opts_chunk$set(echo = TRUE, warning = FALSE, message = FALSE)
+library(tidyverse)
+library(here)
+library(sf)
+library(tmap)
+library(gstat)
+library(stars)
+```
+
+## Read in CA depth to groundwater data
+
+```{r}
+ca_counties_sf <- read_sf(here('data/ca_counties'),
+                          layer = 'CA_Counties_TIGER2016') %>% 
+  janitor::clean_names() %>% 
+  select(name)
+
+st_crs(ca_counties_sf)
+
+## read in groundwater depth data
+
+ca_dgw_sf <- read_sf(here('data/ca_dgw/F2013_DBGS_Points_20150720_093252.gpkg')) %>% 
+  janitor::clean_names()
+
+st_crs(ca_dgw_sf)
+
+## transform dgw data to same crs as ca counties
+
+ca_dgw_sf <- st_transform(ca_dgw_sf, st_crs(ca_counties_sf))
+
+## make a wuick gplot
+
+ggplot() +
+  geom_sf(data = ca_counties_sf) +
+  geom_sf(data = ca_dgw_sf, aes(color = dgbs))
+
+tmap_mode('view')
+tm_shape(ca_dgw_sf) +
+  tm_dots('dgbs', palette = 'Blues')
+
+## tmaptools::palette_explorer() 
+```
+
+## Wrangle to just San Joaquin County
+
+```{r}
+sj_county_sf <- ca_counties_sf %>% 
+  filter(name == 'San Joaquin')
+
+sj_depth_sf <- ca_dgw_sf %>% 
+  st_intersection(sj_county_sf)
+
+ggplot() +
+  geom_sf(data = sj_county_sf) +
+  geom_sf(data = sj_depth_sf, aes(color = dgbs)) +
+  theme_void() +
+  scale_color_viridis_c()
+```
+
+## Set up for kriging
+
+```{r}
+well_duplicates <- sj_depth_sf %>% 
+  janitor::get_dupes(latitude, longitude)
+
+sj_depth_sf <- sj_depth_sf %>% 
+  filter(!local_well %in% well_duplicates$local_well)
+```
+
+## Make a variogram
+
+```{r}
+sj_dgm_vgm <- gstat::variogram(dgbs ~ 1, data = sj_depth_sf)
+
+plot(sj_dgm_vgm)
+
+sj_dgm_vgm_fit <- fit.variogram(sj_dgm_vgm,
+                                model = vgm(model = 'Gau',
+                                nugget = 20,
+                                sill = 3000,
+                                range = 30000))
+
+plot(sj_dgm_vgm, sj_dgm_vgm_fit)
+
+attr(sj_dgm_vgm_fit, 'SSErr')
+```
+
+## Spatial kriging
+
+```{r}
+sj_grid <- st_bbox(sj_county_sf) %>% 
+  stars::st_as_stars(dx = 1000, dy = 1000) %>% 
+  st_crop(sj_county_sf)
+
+plot(sj_grid)
+```
+
+```{r}
+sj_dgm_krige <- krige(dgbs ~ 1, sj_depth_sf, sj_grid,
+                      model = sj_dgm_vgm_fit)
+
+plot(sj_dgm_krige)
+
+### Convert it to a spatial data frame
+krige_df <- as.data.frame(sj_dgm_krige) %>% 
+  st_as_sf(coords = c("x","y")) %>% 
+  drop_na(var1.pred)
+
+st_crs(krige_df) <- 3857
+
+### Then we can use ggplot: 
+ggplot(data = krige_df) +
+  geom_sf(aes(color = var1.pred)) +
+  scale_color_gradient(low = "blue", high = "yellow")
+```
+
